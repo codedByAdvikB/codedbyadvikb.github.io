@@ -1,0 +1,21 @@
+html,body{
+    width: 100%; height: 100%; margin: 0 auto; text-align: center;
+}
+
+
+html,body {
+    background-color: #1a202b;
+    font-family: "Audiowide";
+   width:100%;
+    height:100%;
+}
+h1{
+    color:black;
+}
+.central-div {
+    background-color: white;
+    width: 50%; /* Adjust the width as per your design */
+    margin: 0 auto;
+    padding: 50px;
+    text-align: center;
+}
