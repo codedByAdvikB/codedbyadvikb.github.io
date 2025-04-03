@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hazman : Finding Nemo</title>
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.module.js';
+
+    // --- Scene Setup ---
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 200);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    scene.fog = new THREE.Fog(0x4169E1, 1, 200);
+    renderer.setClearColor(scene.fog.color, 1);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.style.margin = "0";
+    document.body.style.overflow = "hidden";
+    document.body.appendChild(renderer.domElement);
+
+    // --- Bubble Background Setup ---
+    const rangeX = 50, rangeY = 50, rangeZ = 30;
+    const bubbleGeometry = new THREE.SphereGeometry(0.2, 16, 16);
+    const bubbles = [];
+    const numBubbles = 400;
+    for (let i = 0; i < numBubbles; i++) {
+      const bubbleMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: Math.random() * 0.5 + 0.3
+      });
+      const bubble = new THREE.Mesh(bubbleGeometry, bubbleMaterial);
+      bubble.position.set(
+        (Math.random() - 0.5) * rangeX * 2,
+        (Math.random() - 0.5) * rangeY * 2,
+        (Math.random() - 0.5) * rangeZ * 2
+      );
+      scene.add(bubble);
+      bubbles.push(bubble);
+    }
+
+    // --- Character Setup (Sprite) ---
+    const textureLoader = new THREE.TextureLoader();
+    // Original sprite texture
+    const spriteTexture = textureLoader.load("hazman.png");
+    // Nemo sprite texture
+    const nemoTexture = textureLoader.load("https://static.vecteezy.com/system/resources/previews/048/029/170/non_2x/cute-nemo-fish-png.png");
+    
+    const spriteMaterial = new THREE.SpriteMaterial({ map: spriteTexture });
+    const nemoMaterial = new THREE.SpriteMaterial({ map: nemoTexture });
+    
+    // Create two sprites: one for Hazman and one for Nemo
+    const character = new THREE.Sprite(spriteMaterial);
+    const nemo = new THREE.Sprite(nemoMaterial);
+    
+    // Set scales
+    character.scale.set(2, 2, 1);
+    scene.add(character);
+    character.position.set(0, 0, 0); // to be updated later
+
+    nemo.scale.set(2, 2, 1);
+    scene.add(nemo);
+    nemo.position.set(5, 5, 0); // to be updated later
+
+    // --- Camera Setup ---
+    camera.position.set(0, 0, 15);
+
+    // --- Slippery (Inertial) Movement ---
+    const keys = {
+      ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false,
+      w: false, s: false, a: false, d: false
+    };
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'r') { // Reset when 'r' is pressed on the keyboard.
+        reset();
+      }
+      if (keys.hasOwnProperty(event.key)) keys[event.key] = true;
+    });
+    window.addEventListener('keyup', (event) => { if (keys.hasOwnProperty(event.key)) keys[event.key] = false; });
+    let velocity = new THREE.Vector2(0, 0);
+    const acceleration = 0.01;  // Acceleration per frame
+    const friction = 0.95;      // Damping factor
+
+    // --- Obstacle Class ---
+    class Obstacle {
+      /**
+       * Create a new obstacle.
+       * @param {THREE.Vector3} position - The center position of the obstacle.
+       * @param {THREE.Vector3} size - The dimensions of the obstacle.
+       */
+      constructor(position, size) {
+        const geometry = new THREE.BoxGeometry(size.x, size.y, size.z);
+        const material = new THREE.MeshBasicMaterial({ color: 0x8B4513 });
+        this.mesh = new THREE.Mesh(geometry, material);
+        this.mesh.position.copy(position);
+        scene.add(this.mesh);
+        this.boundingBox = new THREE.Box3().setFromObject(this.mesh);
+      }
+      updateBoundingBox() {
+        this.boundingBox.setFromObject(this.mesh);
+      }
+    }
+
+    // --- Create Obstacles ---
+    const obstacles = [];
+    // (No additional obstacles)
+
+    // --- Maze Generation using Prim's Algorithm ---
+    const rows = 10;
+    const cols = 10;
+    const cellSize = 5;
+    const wallThickness = 0.5;
+
+    // Build the grid of cells. Each cell has four walls.
+    function createGrid(rows, cols) {
+      const grid = [];
+      for (let r = 0; r < rows; r++) {
+        grid[r] = [];
+        for (let c = 0; c < cols; c++) {
+          grid[r][c] = {
+            row: r,
+            col: c,
+            walls: { top: true, right: true, bottom: true, left: true },
+            inMaze: false
+          };
+        }
+      }
+      return grid;
+    }
+
+    // Get neighboring cell coordinates
+    const directions = [
+      { dr: -1, dc: 0, wall: 'top', opposite: 'bottom' },
+      { dr: 0, dc: 1, wall: 'right', opposite: 'left' },
+      { dr: 1, dc: 0, wall: 'bottom', opposite: 'top' },
+      { dr: 0, dc: -1, wall: 'left', opposite: 'right' }
+    ];
+
+    // Generate maze using Prim's algorithm
+    function generateMaze(rows, cols) {
+      const grid = createGrid(rows, cols);
+      const walls = [];
+      
+      // Choose a random starting cell (for maze generation only)
+      const startRow = Math.floor(Math.random() * rows);
+      const startCol = Math.floor(Math.random() * cols);
+      grid[startRow][startCol].inMaze = true;
+      
+      // Add all walls of the starting cell
+      directions.forEach(dir => {
+        const nr = startRow + dir.dr;
+        const nc = startCol + dir.dc;
+        if (nr >= 0 && nr < rows && nc >= 0 && nc < cols) {
+          walls.push({
+            row: startRow,
+            col: startCol,
+            direction: dir.wall,
+            opposite: dir.opposite,
+            neighborRow: nr,
+            neighborCol: nc
+          });
+        }
+      });
+      
+      while (walls.length > 0) {
+        // Pick a random wall from the list
+        const randomIndex = Math.floor(Math.random() * walls.length);
+        const wall = walls[randomIndex];
+        const { row, col, direction, opposite, neighborRow, neighborCol } = wall;
+        
+        if (!grid[neighborRow][neighborCol].inMaze) {
+          // Remove the wall between the current cell and the neighbor
+          grid[row][col].walls[direction] = false;
+          grid[neighborRow][neighborCol].walls[opposite] = false;
+          grid[neighborRow][neighborCol].inMaze = true;
+          
+          // Add the neighboring walls of the new cell
+          directions.forEach(dir => {
+            const nr = neighborRow + dir.dr;
+            const nc = neighborCol + dir.dc;
+            if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && !grid[nr][nc].inMaze) {
+              walls.push({
+                row: neighborRow,
+                col: neighborCol,
+                direction: dir.wall,
+                opposite: dir.opposite,
+                neighborRow: nr,
+                neighborCol: nc
+              });
+            }
+          });
+        }
+        // Remove the wall from the list whether it was used or not
+        walls.splice(randomIndex, 1);
+      }
+      return grid;
+    }
+
+    // Create the maze grid
+    const mazeGrid = generateMaze(rows, cols);
+
+    // Define maze origin so that the maze is centered in the scene.
+    const mazeWidth = cols * cellSize;
+    const mazeHeight = rows * cellSize;
+    const originX = -mazeWidth / 2;
+    const originY = mazeHeight / 2;
+
+    // --- Place Hazman in a Safe Starting Cell ---
+    // Here we choose the top-left cell (cell [0,0]) for Hazman.
+    const startCellX = originX + cellSize / 2;
+    const startCellY = originY - cellSize / 2;
+    character.position.set(startCellX, startCellY, 0);
+    
+    // --- Add Maze Walls as Obstacles ---
+    // For interior walls, add the right and bottom walls per cell.
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cell = mazeGrid[r][c];
+        // Compute cell center coordinates
+        const cx = originX + c * cellSize + cellSize / 2;
+        const cy = originY - r * cellSize - cellSize / 2;
+        
+        // Right wall (if exists)
+        if (cell.walls.right) {
+          const wallX = cx + cellSize / 2;
+          const wallY = cy;
+          obstacles.push(new Obstacle(
+            new THREE.Vector3(wallX, wallY, 0),
+            new THREE.Vector3(wallThickness, cellSize, 2)
+          ));
+        }
+        // Bottom wall (if exists)
+        if (cell.walls.bottom) {
+          const wallX = cx;
+          const wallY = cy - cellSize / 2;
+          obstacles.push(new Obstacle(
+            new THREE.Vector3(wallX, wallY, 0),
+            new THREE.Vector3(cellSize, wallThickness, 2)
+          ));
+        }
+      }
+    }
+    // Add outer boundaries (if not already added by cell walls)
+    // Left boundary
+    obstacles.push(new Obstacle(
+      new THREE.Vector3(originX, originY - mazeHeight/2, 0),
+      new THREE.Vector3(wallThickness, mazeHeight, 2)
+    ));
+    // Right boundary
+    obstacles.push(new Obstacle(
+      new THREE.Vector3(originX + mazeWidth, originY - mazeHeight/2, 0),
+      new THREE.Vector3(wallThickness, mazeHeight, 2)
+    ));
+    // Top boundary
+    obstacles.push(new Obstacle(
+      new THREE.Vector3(originX + mazeWidth/2, originY, 0),
+      new THREE.Vector3(mazeWidth, wallThickness, 2)
+    ));
+    // Bottom boundary
+    obstacles.push(new Obstacle(
+      new THREE.Vector3(originX + mazeWidth/2, originY - mazeHeight, 0),
+      new THREE.Vector3(mazeWidth, wallThickness, 2)
+    ));
+
+    // --- Adjust Nemo's Position ---
+    // Place Nemo at the center of the maze's exit cell (bottom-right cell)
+    const exitRow = rows - 1;
+    const exitCol = cols - 1;
+    const nemoX = originX + exitCol * cellSize + cellSize / 2;
+    const nemoY = originY - exitRow * cellSize - cellSize / 2;
+    nemo.position.set(nemoX, nemoY, 0);
+
+    // --- Collision Detection Parameters ---
+    const characterCollisionRadius = 0.8;  // Approximate collision radius for Hazman
+    const nemoCollisionThreshold = 1.5;    // Distance threshold for collision with Nemo
+
+    // Flag to control game state
+    let gameWon = false;
+
+    // --- Win Screen Function ---
+    function showWinScreen() {
+  gameWon = true;
+  document.body.innerHTML = `
+    <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; background-color: #4169E1; color: white; text-align: center;">
+      <h1 style="font-size: 3em; font-family: Arial;">You Win!</h1>
+      <p style="font-size: 1.5em; font-family: Arial;">Press R or the right gamepad button to restart.</p>
+    </div>
+  `;
+}
+
+
+    // --- Reset Function ---
+    // This function reloads the page to reset the game.
+    function reset() {
+      window.location.reload();
+    }
+
+    // --- Animation Loop ---
+    function animate() {
+      if (gameWon) {
+        // In case the win screen is active, also check for gamepad reset input.
+        const gamepads = navigator.getGamepads();
+        if (gamepads[0] && gamepads[0].buttons[5] && gamepads[0].buttons[5].pressed) {
+          reset();
+          return;
+        }
+        requestAnimationFrame(animate);
+        return;
+      }
+      requestAnimationFrame(animate);
+
+      // Store previous position for collision revert
+      const prevPosition = character.position.clone();
+
+      // Update character velocity based on keyboard input
+      if (keys.ArrowUp || keys.w) velocity.y += acceleration;
+      if (keys.ArrowDown || keys.s) velocity.y -= acceleration;
+      if (keys.ArrowLeft || keys.a) velocity.x -= acceleration;
+      if (keys.ArrowRight || keys.d) velocity.x += acceleration;
+
+      // --- Gamepad Controls ---
+      // Check if a gamepad is connected and read its axes for movement
+      const gamepads = navigator.getGamepads();
+      if (gamepads[0]) {
+        const gp = gamepads[0];
+        // gp.axes[0] is typically the left stick's horizontal axis,
+        // and gp.axes[1] is the vertical axis.
+        // Multiply the axes value by a factor for acceleration control.
+        const gamepadAccelerationFactor = 0.01; // Adjust sensitivity as needed
+        velocity.x += gp.axes[0] * gamepadAccelerationFactor;
+        // Invert the vertical axis if desired (depending on your controller)
+        velocity.y += -gp.axes[1] * gamepadAccelerationFactor;
+
+        // Check for reset input from the gamepad (right shoulder button, index 5)
+        if (gp.buttons[5] && gp.buttons[5].pressed) {
+          reset();
+          return;
+        }
+      }
+
+      // Apply friction and update position
+      velocity.multiplyScalar(friction);
+      character.position.x += velocity.x *1.5;
+      character.position.y += velocity.y * 1.5;
+
+      // Create a collision sphere for Hazman
+      const characterSphere = new THREE.Sphere(character.position, characterCollisionRadius);
+      let collision = false;
+      obstacles.forEach(obstacle => {
+        obstacle.updateBoundingBox();
+        if (obstacle.boundingBox.intersectsSphere(characterSphere)) {
+          collision = true;
+        }
+      });
+      if (collision) {
+        // Revert movement and reset velocity if a collision is detected
+        character.position.copy(prevPosition);
+        velocity.set(0, 0);
+      }
+
+      // Check collision between Hazman and Nemo using distance
+      if (character.position.distanceTo(nemo.position) < nemoCollisionThreshold) {
+        showWinScreen();
+        return;
+      }
+
+      // Update bubbles: move upward slowly and wrap around the camera's area
+      bubbles.forEach(bubble => {
+        bubble.position.y += 0.01;
+        if (bubble.position.x < camera.position.x - rangeX) {
+          bubble.position.x += 2 * rangeX;
+        } else if (bubble.position.x > camera.position.x + rangeX) {
+          bubble.position.x -= 2 * rangeX;
+        }
+        if (bubble.position.y < camera.position.y - rangeY) {
+          bubble.position.y += 2 * rangeY;
+        } else if (bubble.position.y > camera.position.y + rangeY) {
+          bubble.position.y -= 2 * rangeY;
+        }
+        if (bubble.position.z < camera.position.z - rangeZ) {
+          bubble.position.z += 2 * rangeZ;
+        } else if (bubble.position.z > camera.position.z + rangeZ) {
+          bubble.position.z -= 2 * rangeZ;
+        }
+      });
+
+      // Smooth camera follow (using lerp for a slippery feel)
+      const cameraTarget = new THREE.Vector3(character.position.x, character.position.y, camera.position.z);
+      camera.position.lerp(cameraTarget, 0.1);
+      camera.lookAt(character.position);
+
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth/window.innerHeight;
+      camera.updateProjectionMatrix();
+    });
+
+    animate();
+  </script>
+</head>
+<body></body>
+</html>
